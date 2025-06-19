@@ -1,0 +1,202 @@
+import openai
+import os
+import base64
+import re
+import ast
+import json
+from google.colab import files
+from dotenv import load_dotenv
+
+# LangChain Models
+from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
+from IPython.display import Markdown, display
+
+# ================= Helper Functions ======================
+def parse_gpt_list(gpt_output):
+    cleaned = re.sub(r"```(?:python)?\n?|```", "", gpt_output).strip()
+    return ast.literal_eval(cleaned)
+
+# ================= Vision Module (OpenAI GPT-4o Vision) ======================
+def get_ingredients_from_image():
+    uploaded = files.upload()
+    image_path = list(uploaded.keys())[0]
+    print(f"\n✅ Image uploaded: {image_path}")
+
+    def encode_image(image_path):
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode('utf-8')
+
+    base64_image = encode_image(image_path)
+    client = openai.OpenAI(api_key=openai.api_key)
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": """
+                You are a helpful cooking assistant.
+                Analyze the uploaded image and extract a list of food ingredients you can identify.
+                Return ONLY a valid Python list of ingredient names.
+                Do not include quantities, brand names, packaging, or utensils.
+                If uncertain, omit the object.
+            """},
+            {"role": "user", "content": [
+                {"type": "text", "text": """
+                    Here is the image of my ingredients.
+                    Output format: A valid Python list of strings.
+                    Example: [\"apple\", \"broccoli\", \"chicken breast\"]
+                """},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]}
+        ],
+        max_tokens=500,
+        temperature=0
+    )
+
+    ingredients_raw = response.choices[0].message.content
+    print("\n🍳 Extracted Ingredients (Raw):")
+    print(ingredients_raw)
+    ingredients_list = parse_gpt_list(ingredients_raw)
+    print("\n✅ Final Ingredients List:")
+    print(ingredients_list)
+
+    return ingredients_list
+
+# ================= Text Input Ingredients ======================
+def get_ingredients_from_text():
+    ingredients = input("Enter your ingredients (comma separated): ")
+    return [item.strip() for item in ingredients.split(',') if item.strip()]
+
+# ================= Recipe Generator (GPT-4o) ======================
+def generate_recipe_gpt4o(ingredients, dietary_restrictions):
+    prompt = f"""
+    You are a professional recipe developer. Given the ingredients: {', '.join(ingredients)}
+    and dietary restrictions: {dietary_restrictions or 'None'}, generate a complete recipe.
+    Include title, ingredients, instructions, prep time, cook time, servings.
+    """
+    return main_llm.invoke(prompt).content
+
+# ================= Simplified Q&A Module (Direct Claude) ======================
+qna_prompt_template = PromptTemplate.from_template("""
+You are a culinary expert. Based on:
+Ingredients: {ingredients}
+Dietary Restrictions: {restrictions}
+Recipe: {recipe_text}
+User Question: "{question}"
+
+Provide a clear answer directly, no extra markdown.
+Answer:
+""")
+
+def ask_claude_qna(ingredients, restrictions, recipe_text, question):
+    prompt = qna_prompt_template.format(
+        ingredients=ingredients,
+        restrictions=restrictions,
+        recipe_text=recipe_text,
+        question=question
+    )
+    response = llm_claude.invoke(prompt).content
+    return response
+
+# ================= Routing Module (Gemini as Meta-Router) ======================
+def route_task(user_input):
+    routing_prompt = f"""
+    Classify this request:
+    - vision: if user wants to upload photo or image
+    - text_input: if user provides ingredients
+    - generate_recipe: if user directly requests recipe
+    - qa: if user asks question about recipe
+
+    Input: {user_input}
+    Output: vision OR text_input OR generate_recipe OR qa
+    """
+    return router_llm.invoke(routing_prompt).content.lower().strip()
+
+# ================= Master Orchestration ======================
+def run_ChefAI():
+    print("🎯 ChefAI Assistant Booting Up...")
+    print("🍳 Initializing your Smart Kitchen Assistant...")
+    print("👨‍🍳 Welcome to ChefAI!")
+
+    print("\n🎯 ChefAI - Your Personalized Recipe Assistant!")
+    print("Ready to whip up something tasty with what you have! 🥬🍗🍅")
+
+    print("📋 Let's start by figuring out what ingredients you're working with.")
+    print("💬 Question")
+
+    global openai_client, main_llm, router_llm, llm_claude
+    load_dotenv()
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    claude_key = os.getenv("CLAUDE_API_KEY")
+    google_key = os.getenv("GEMINI_API_KEY")
+
+    if openai_key:
+        openai_client = openai.OpenAI(api_key=openai_key)
+        main_llm = ChatOpenAI(model="gpt-4o", openai_api_key=openai_key, temperature=0)
+        print("✅ OpenAI GPT-4o initialized.")
+
+    if claude_key:
+        llm_claude = ChatAnthropic(model="claude-sonnet-4-20250514", anthropic_api_key=claude_key)
+        print("✅ Claude Sonnet-4 initialized.")
+
+    if google_key:
+        os.environ["GOOGLE_API_KEY"] = google_key
+        router_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
+        print("✅ Gemini Router initialized.")
+
+    print("\nWould you like to:")
+    print("1️⃣ Upload a photo of your fridge or pantry")
+    print("2️⃣ Type in your ingredients manually")
+
+    user_input = input("\n💬 Type your request or describe what you want to do: Example: 'I want to upload a photo of my fridge' or 'My ingredients are tomatoes, cheese, and pasta.'\n👉 Your input: ")
+    task = route_task(user_input)
+    print(f"\nRouting decision: {task}")
+
+    if task == "vision":
+        ingredients = get_ingredients_from_image()
+    elif task == "text_input":
+        ingredients = get_ingredients_from_text()
+    else:
+        ingredients = []
+
+    if task in ["vision", "text_input"]:
+        dietary = input("Any dietary restrictions? ")
+        recipe = generate_recipe_gpt4o(ingredients, dietary)
+        display(Markdown(recipe))
+        start_qa_session(ingredients, dietary, recipe)
+
+    elif task == "generate_recipe":
+        ingredients = get_ingredients_from_text()
+        dietary = input("Dietary restrictions? ")
+        recipe = generate_recipe_gpt4o(ingredients, dietary)
+        display(Markdown(recipe))
+        start_qa_session(ingredients, dietary, recipe)
+
+    elif task == "qa":
+        ingredients = get_ingredients_from_text()
+        dietary = input("Restrictions? ")
+        recipe = input("Paste recipe text: ")
+        start_qa_session(ingredients, dietary, recipe)
+
+# ================= Q&A Session ======================
+def start_qa_session(ingredients, dietary_restrictions, recipe_text):
+    print("\n💬 Ask your questions about the recipe! Type 'exit' to quit.")
+    while True:
+        question = input("\nYour question: ").strip()
+        if question.lower() == "exit": break
+        try:
+            response = ask_claude_qna(ingredients, dietary_restrictions, recipe_text, question)
+            print("\nChefAI:", response)
+        except Exception as e:
+            print(f"Error: {e}")
+
+# ================= Entry Point ======================
+if __name__ == "__main__":
+    openai_client = None
+    main_llm = None
+    router_llm = None
+    llm_claude = None
+    run_ChefAI()
