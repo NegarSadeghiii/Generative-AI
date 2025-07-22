@@ -27,4 +27,4 @@ This project was created as the final assignment for a Generative AI course. It 
 - `README.md`: Project overview and usage instructions
 
 **Course:** Generative AI Final Project
-**Date:** Junw 2025
+**Date:** June 2025
