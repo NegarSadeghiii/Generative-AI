@@ -1,202 +1,454 @@
-import openai
+# CHEFAI - Simple Gradio Interface for Google Colab
+# Run this directly in Colab after installing packages
+
+# First, install required packages in Colab
+# !pip install -q gradio langchain-openai langchain-anthropic langchain-google-genai langgraph pillow openai
+
+import gradio as gr
 import os
 import base64
-import re
-import ast
-import json
-from google.colab import files
-from dotenv import load_dotenv
-
-# LangChain Models
-from langchain.prompts import PromptTemplate
+from datetime import datetime
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_anthropic import ChatAnthropic
-from IPython.display import Markdown, display
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import SystemMessage, HumanMessage
+import openai
+from PIL import Image
+import io
 
-# ================= Helper Functions ======================
-def parse_gpt_list(gpt_output):
-    cleaned = re.sub(r"```(?:python)?\n?|```", "", gpt_output).strip()
-    return ast.literal_eval(cleaned)
+# +++++ SIMPLE SETUP +++++
 
-# ================= Vision Module (OpenAI GPT-4o Vision) ======================
-def get_ingredients_from_image():
-    uploaded = files.upload()
-    image_path = list(uploaded.keys())[0]
-    print(f"\n✅ Image uploaded: {image_path}")
-
-    def encode_image(image_path):
-        with open(image_path, "rb") as img_file:
-            return base64.b64encode(img_file.read()).decode('utf-8')
-
-    base64_image = encode_image(image_path)
-    client = openai.OpenAI(api_key=openai.api_key)
-
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": """
-                You are a helpful cooking assistant.
-                Analyze the uploaded image and extract a list of food ingredients you can identify.
-                Return ONLY a valid Python list of ingredient names.
-                Do not include quantities, brand names, packaging, or utensils.
-                If uncertain, omit the object.
-            """},
-            {"role": "user", "content": [
-                {"type": "text", "text": """
-                    Here is the image of my ingredients.
-                    Output format: A valid Python list of strings.
-                    Example: [\"apple\", \"broccoli\", \"chicken breast\"]
-                """},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-            ]}
-        ],
-        max_tokens=500,
-        temperature=0
-    )
-
-    ingredients_raw = response.choices[0].message.content
-    print("\n🍳 Extracted Ingredients (Raw):")
-    print(ingredients_raw)
-    ingredients_list = parse_gpt_list(ingredients_raw)
-    print("\n✅ Final Ingredients List:")
-    print(ingredients_list)
-
-    return ingredients_list
-
-# ================= Text Input Ingredients ======================
-def get_ingredients_from_text():
-    ingredients = input("Enter your ingredients (comma separated): ")
-    return [item.strip() for item in ingredients.split(',') if item.strip()]
-
-# ================= Recipe Generator (GPT-4o) ======================
-def generate_recipe_gpt4o(ingredients, dietary_restrictions):
-    prompt = f"""
-    You are a professional recipe developer. Given the ingredients: {', '.join(ingredients)}
-    and dietary restrictions: {dietary_restrictions or 'None'}, generate a complete recipe.
-    Include title, ingredients, instructions, prep time, cook time, servings.
+def setup_api_keys():
     """
-    return main_llm.invoke(prompt).content
-
-# ================= Simplified Q&A Module (Direct Claude) ======================
-qna_prompt_template = PromptTemplate.from_template("""
-You are a culinary expert. Based on:
-Ingredients: {ingredients}
-Dietary Restrictions: {restrictions}
-Recipe: {recipe_text}
-User Question: "{question}"
-
-Provide a clear answer directly, no extra markdown.
-Answer:
-""")
-
-def ask_claude_qna(ingredients, restrictions, recipe_text, question):
-    prompt = qna_prompt_template.format(
-        ingredients=ingredients,
-        restrictions=restrictions,
-        recipe_text=recipe_text,
-        question=question
-    )
-    response = llm_claude.invoke(prompt).content
-    return response
-
-# ================= Routing Module (Gemini as Meta-Router) ======================
-def route_task(user_input):
-    routing_prompt = f"""
-    Classify this request:
-    - vision: if user wants to upload photo or image
-    - text_input: if user provides ingredients
-    - generate_recipe: if user directly requests recipe
-    - qa: if user asks question about recipe
-
-    Input: {user_input}
-    Output: vision OR text_input OR generate_recipe OR qa
+    Load API keys from Colab secrets (google.colab.userdata).
+    Sets environment vars for OpenAI, Anthropic (Claude), and Google Gemini.
+    Returns a tuple of (openai_key, claude_key, gemini_key).
     """
-    return router_llm.invoke(routing_prompt).content.lower().strip()
+    try:
+        from google.colab import userdata
+        openai_key = userdata.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = openai_key
 
-# ================= Master Orchestration ======================
-def run_ChefAI():
-    print("🎯 ChefAI Assistant Booting Up...")
-    print("🍳 Initializing your Smart Kitchen Assistant...")
-    print("👨‍🍳 Welcome to ChefAI!")
-
-    print("\n🎯 ChefAI - Your Personalized Recipe Assistant!")
-    print("Ready to whip up something tasty with what you have! 🥬🍗🍅")
-
-    print("📋 Let's start by figuring out what ingredients you're working with.")
-    print("💬 Question")
-
-    global openai_client, main_llm, router_llm, llm_claude
-    load_dotenv()
-
-    openai_key = os.getenv("OPENAI_API_KEY")
-    claude_key = os.getenv("CLAUDE_API_KEY")
-    google_key = os.getenv("GEMINI_API_KEY")
-
-    if openai_key:
-        openai_client = openai.OpenAI(api_key=openai_key)
-        main_llm = ChatOpenAI(model="gpt-4o", openai_api_key=openai_key, temperature=0)
-        print("✅ OpenAI GPT-4o initialized.")
-
-    if claude_key:
-        llm_claude = ChatAnthropic(model="claude-sonnet-4-20250514", anthropic_api_key=claude_key)
-        print("✅ Claude Sonnet-4 initialized.")
-
-    if google_key:
-        os.environ["GOOGLE_API_KEY"] = google_key
-        router_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
-        print("✅ Gemini Router initialized.")
-
-    print("\nWould you like to:")
-    print("1️⃣ Upload a photo of your fridge or pantry")
-    print("2️⃣ Type in your ingredients manually")
-
-    user_input = input("\n💬 Type your request or describe what you want to do: Example: 'I want to upload a photo of my fridge' or 'My ingredients are tomatoes, cheese, and pasta.'\n👉 Your input: ")
-    task = route_task(user_input)
-    print(f"\nRouting decision: {task}")
-
-    if task == "vision":
-        ingredients = get_ingredients_from_image()
-    elif task == "text_input":
-        ingredients = get_ingredients_from_text()
-    else:
-        ingredients = []
-
-    if task in ["vision", "text_input"]:
-        dietary = input("Any dietary restrictions? ")
-        recipe = generate_recipe_gpt4o(ingredients, dietary)
-        display(Markdown(recipe))
-        start_qa_session(ingredients, dietary, recipe)
-
-    elif task == "generate_recipe":
-        ingredients = get_ingredients_from_text()
-        dietary = input("Dietary restrictions? ")
-        recipe = generate_recipe_gpt4o(ingredients, dietary)
-        display(Markdown(recipe))
-        start_qa_session(ingredients, dietary, recipe)
-
-    elif task == "qa":
-        ingredients = get_ingredients_from_text()
-        dietary = input("Restrictions? ")
-        recipe = input("Paste recipe text: ")
-        start_qa_session(ingredients, dietary, recipe)
-
-# ================= Q&A Session ======================
-def start_qa_session(ingredients, dietary_restrictions, recipe_text):
-    print("\n💬 Ask your questions about the recipe! Type 'exit' to quit.")
-    while True:
-        question = input("\nYour question: ").strip()
-        if question.lower() == "exit": break
+        # Optionally load Claude API key
         try:
-            response = ask_claude_qna(ingredients, dietary_restrictions, recipe_text, question)
-            print("\nChefAI:", response)
-        except Exception as e:
-            print(f"Error: {e}")
+            claude_key = userdata.get("CLAUDE_API_KEY")
+            os.environ["CLAUDE_API_KEY"] = claude_key
+        except Exception:
+            claude_key = None
 
-# ================= Entry Point ======================
+        # Optionally load Gemini API key
+        try:
+            gemini_key = userdata.get("GEMINI_API_KEY")
+            os.environ["GEMINI_API_KEY"] = gemini_key
+        except Exception:
+            gemini_key = None
+
+        return openai_key, claude_key, gemini_key
+
+    except Exception as e:
+        # If not running in Colab or userdata unavailable
+        print(f"Error loading API keys: {e}")
+        return None, None, None
+
+# Load keys and initialize status
+openai_key, claude_key, gemini_key = setup_api_keys()
+if openai_key:
+    # Primary LLM (GPT-4o) for most tasks
+    main_llm = ChatOpenAI(model="gpt-4o", temperature=0.7, openai_api_key=openai_key)
+    vision_client = openai.OpenAI(api_key=openai_key)
+    # Fall back to GPT-4o if Anthropic not configured
+    qa_llm = ChatAnthropic(model="claude-sonnet-4-20250514", anthropic_api_key=claude_key) if claude_key else main_llm
+    # Fall back to GPT-4o if Gemini not configured
+    router_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=gemini_key) if gemini_key else main_llm
+    api_ready = True
+    status_msg = "APIs Ready!"
+else:
+    main_llm = vision_client = qa_llm = router_llm = None
+    api_ready = False
+    status_msg = "Please set OPENAI_API_KEY in Colab secrets"
+
+# Global state variables for the app
+ingredients_list = []           # Stores current ingredients
+dietary_restrictions = "None"   # Stores dietary preference
+cuisine_type = "Any cuisine"    # Stores cuisine preference
+current_recipe = ""             # Last generated recipe text
+conversation_history = []       # Q&A history for display
+
+# +++++ CORE FUNCTIONS +++++
+
+def add_ingredients(manual_input):
+    """
+    Add comma‑separated ingredients provided by the user.
+    - Splits on commas, strips whitespace, deduplicates.
+    Returns updated ingredients_list and a user‑friendly message.
+    """
+    global ingredients_list
+    if not manual_input.strip():
+        return ingredients_list, "Please enter some ingredients"
+
+    new_ings = [ing.strip() for ing in manual_input.split(',') if ing.strip()]
+    ingredients_list.extend(new_ings)
+    # Deduplicate
+    ingredients_list = list(dict.fromkeys(ingredients_list))
+    return ingredients_list, f"Added: {', '.join(new_ings)}"
+
+def analyze_image(image):
+    """
+    Use GPT-4 Vision to detect ingredients from an uploaded image.
+    - Encodes the image to base64 and sends it to the vision API.
+    - Parses comma‑separated response into ingredients.
+    Returns a status message and updated ingredients_list.
+    """
+    global ingredients_list
+    if not api_ready or not vision_client:
+        return "Vision analysis not available", ingredients_list
+    if image is None:
+        return "Please upload an image", ingredients_list
+
+    try:
+        # Convert PIL image to base64
+        buffer = io.BytesIO()
+        fmt = 'JPEG' if image.format != 'PNG' else 'PNG'
+        image.save(buffer, format=fmt)
+        b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        # Call GPT-4o Vision endpoint
+        response = vision_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role":"system","content":"You are a kitchen assistant. List ingredients seen, comma‑separated."},
+                {"role":"user","content":[
+                    {"type":"text","text":"What ingredients do you see?"},
+                    {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{b64}"}}
+                ]}
+            ],
+            max_tokens=300,
+            temperature=0
+        )
+        detected = response.choices[0].message.content
+        new_ings = [ing.strip() for ing in detected.split(',') if ing.strip()]
+        ingredients_list.extend(new_ings)
+        ingredients_list = list(dict.fromkeys(ingredients_list))
+        return f"Detected: {detected}", ingredients_list
+
+    except Exception as e:
+        return f"Error: {e}", ingredients_list
+
+def smart_parse(natural_input):
+    """
+    Use the LLM to parse free‑form text into ingredients, dietary, and cuisine.
+    - Prompts the model to output exactly three lines: INGREDIENTS, DIETARY, CUISINE.
+    - Updates globals accordingly.
+    Returns (ingredients_list, dietary_restrictions, cuisine_type, message).
+    """
+    global ingredients_list, dietary_restrictions, cuisine_type
+    if not api_ready or not main_llm:
+        return ingredients_list, dietary_restrictions, cuisine_type, "AI not available"
+    if not natural_input.strip():
+        return ingredients_list, dietary_restrictions, cuisine_type, "Please provide input"
+
+    try:
+        prompt = f"""Parse this: "{natural_input}"
+Return EXACTLY:
+INGREDIENTS: [list]
+DIETARY: [restrictions]
+CUISINE: [type]"""
+        resp = main_llm.invoke([SystemMessage(content=prompt)])
+        result = resp.content.strip().splitlines()
+
+        new_ings, new_diet, new_cuis = [], dietary_restrictions, cuisine_type
+        for line in result:
+            if line.startswith("INGREDIENTS:"):
+                new_ings = [i.strip() for i in line[len("INGREDIENTS:"):].split(',') if i.strip()]
+            elif line.startswith("DIETARY:"):
+                new_diet = line[len("DIETARY:"):].strip()
+            elif line.startswith("CUISINE:"):
+                new_cuis = line[len("CUISINE:"):].strip()
+
+        ingredients_list.extend(new_ings)
+        ingredients_list = list(dict.fromkeys(ingredients_list))
+        dietary_restrictions = new_diet
+        cuisine_type = new_cuis
+
+        msg = f"Parsed! Ingredients: {', '.join(new_ings)} | Dietary: {new_diet} | Cuisine: {new_cuis}"
+        return ingredients_list, new_diet, new_cuis, msg
+
+    except Exception as e:
+        return ingredients_list, dietary_restrictions, cuisine_type, f"Error: {e}"
+
+def generate_recipe(recipe_type, cooking_time, difficulty, notes):
+    """
+    Ask the LLM to generate a recipe given:
+      - current ingredients_list, dietary_restrictions, cuisine_type
+      - user preferences (type, time, difficulty, notes)
+    Returns the full recipe markdown.
+    """
+    global current_recipe
+    if not api_ready or not main_llm:
+        return "Recipe generation not available"
+    if not ingredients_list:
+        return "Please add ingredients first!"
+
+    prefs = f"Type: {recipe_type}, Time: {cooking_time}, Difficulty: {difficulty}"
+    if notes:
+        prefs += f", Notes: {notes}"
+
+    prompt = f"""Create a detailed recipe:
+INGREDIENTS: {', '.join(ingredients_list)}
+DIETARY: {dietary_restrictions}
+CUISINE: {cuisine_type}
+PREFERENCES: {prefs}
+
+Format:
+# [Recipe Title]
+
+## Info
+- Prep: X min | Cook: X min | Serves: X
+
+## Ingredients
+[List with quantities]
+
+## Instructions
+[Step by step]
+
+## Tips
+[Chef's advice]"""
+    resp = main_llm.invoke([SystemMessage(content=prompt)])
+    current_recipe = resp.content
+    return current_recipe
+
+def modify_recipe(modification):
+    """
+    Send the current_recipe plus a user request to the LLM to modify it.
+    Returns the new recipe.
+    """
+    global current_recipe
+    if not api_ready or not main_llm:
+        return "Modification not available"
+    if not current_recipe:
+        return "No recipe to modify"
+    if not modification.strip():
+        return "Please specify modifications"
+
+    prompt = f"""Modify this recipe:
+{current_recipe}
+USER REQUEST: {modification}
+Return the modified recipe in the same format."""
+    resp = main_llm.invoke([SystemMessage(content=prompt)])
+    current_recipe = resp.content
+    return current_recipe
+
+def answer_question(question):
+    """
+    Answer a cooking question, using Claude if configured or GPT otherwise.
+    - Builds context from current_recipe & ingredients_list.
+    - Appends Q&A to conversation_history.
+    Returns the answer text.
+    """
+    global conversation_history
+    if not api_ready:
+        return "Q&A not available"
+    if not question.strip():
+        return "Please ask a question"
+
+    context = ""
+    if current_recipe:
+        context += f"Current recipe: {current_recipe[:200]}...\n"
+    if ingredients_list:
+        context += f"Available ingredients: {', '.join(ingredients_list)}\n"
+    if dietary_restrictions != "None":
+        context += f"Dietary restrictions: {dietary_restrictions}\n"
+
+    qa_prompt = f"""You are a professional chef. Answer this question:
+{context}
+Question: {question}"""
+
+    llm = qa_llm if qa_llm != main_llm else main_llm
+    if llm is main_llm:
+        resp = llm.invoke([SystemMessage(content=qa_prompt)])
+    else:
+        resp = llm.invoke([
+            SystemMessage(content="You are a professional chef."),
+            HumanMessage(content=qa_prompt)
+        ])
+
+    answer = resp.content
+    conversation_history.append({
+        'question': question,
+        'answer': answer,
+        'timestamp': datetime.now().strftime('%H:%M:%S')
+    })
+    return answer
+
+def clear_all():
+    """
+    Reset all global state: ingredients_list, dietary_restrictions, cuisine_type,
+    current_recipe, conversation_history.
+    Returns the cleared defaults.
+    """
+    global ingredients_list, dietary_restrictions, cuisine_type, current_recipe, conversation_history
+    ingredients_list = []
+    dietary_restrictions = "None"
+    cuisine_type = "Any cuisine"
+    current_recipe = ""
+    conversation_history = []
+    return [], "None", "Any cuisine", "", "All data cleared!"
+
+def remove_ingredient(ingredient):
+    """
+    Remove a single ingredient from ingredients_list.
+    Returns updated list and a status message.
+    """
+    global ingredients_list
+    ing = ingredient.strip()
+    if ing in ingredients_list:
+        ingredients_list.remove(ing)
+        return ingredients_list, f"Removed {ing}"
+    return ingredients_list, f"{ing} not found"
+
+# +++++ GRADIO INTERFACE DEFINITION +++++
+
+def create_interface():
+    """
+    Build the Gradio Blocks interface:
+      - Ingredients management (manual, photo, remove)
+      - Preferences (dietary, cuisine)
+      - Recipe gen & modify
+      - Cooking Q&A
+    """
+    with gr.Blocks(
+        css="""
+        .main-header { text-align:center; font-size:2.5rem; font-weight:bold; }
+        .status-card { padding:1rem; border-radius:8px; margin-bottom:1rem; }
+        .success { background: #4facfe; color:white; }
+        .warning { background: #fa709a; color:#333; }
+        """,
+        title="ChefAI – Intelligent Cooking Assistant"
+    ) as app:
+
+        # HEADER
+        gr.HTML(f"""
+        <div class="main-header">ChefAI – Intelligent Cooking Assistant</div>
+        <div class="status-card {'success' if api_ready else 'warning'}">
+          {status_msg}
+        </div>
+        """)
+
+        # INGREDIENTS
+        gr.Markdown("## Manage Your Ingredients")
+        ingredients_box = gr.Textbox(value=", ".join(ingredients_list),
+                                    label="Current Ingredients", interactive=False)
+        clear_btn = gr.Button("Clear All", variant="secondary")
+        refresh_btn = gr.Button("Refresh", variant="secondary")
+
+        with gr.Tabs():
+            with gr.Tab("Manual Entry"):
+                manual_input = gr.Textbox(label="Enter ingredients (comma-separated)")
+                add_btn = gr.Button("➕ Add Ingredients")
+                manual_output = gr.Textbox(label="Result", interactive=False)
+            with gr.Tab("Photo Analysis"):
+                img_input = gr.Image(label="Upload ingredient photo", type="pil")
+                analyze_btn = gr.Button("🔍 Analyze Photo")
+                image_output = gr.Textbox(label="Analysis Result", interactive=False)
+            with gr.Tab("Remove"):
+                rem_input = gr.Textbox(label="Ingredient to remove")
+                rem_btn = gr.Button("Remove")
+                rem_output = gr.Textbox(label="Result", interactive=False)
+
+        # PREFERENCES
+        gr.Markdown("## Cooking Preferences")
+        dietary_dd = gr.Dropdown(
+            choices=["None","Vegetarian","Vegan","Gluten-Free","Keto","Paleo","Low-Carb","Dairy-Free"],
+            value=dietary_restrictions, label="Dietary Restrictions"
+        )
+        cuisine_dd = gr.Dropdown(
+            choices=["Any cuisine","Italian","Asian","Mexican","Mediterranean","Indian","French","American","Thai","Japanese","Chinese","Korean","Spanish","Greek","Middle Eastern"],
+            value=cuisine_type, label="Cuisine Type"
+        )
+
+        # RECIPE GENERATION
+        gr.Markdown("## Recipe Generation")
+        recipe_type = gr.Dropdown(
+            ["Surprise me!","Main course","Soup","Salad","Pasta","Stir-fry","Casserole","Appetizer","Side dish"],
+            value="Surprise me!", label="Recipe Type"
+        )
+        time_dd = gr.Dropdown(
+            ["Any time","Quick (under 30 min)","Medium (30-60 min)","Long (over 1 hour)"],
+            value="Any time", label="Cooking Time"
+        )
+        diff_dd = gr.Dropdown(
+            ["Any difficulty","Easy","Medium","Hard"], value="Any difficulty", label="Difficulty"
+        )
+        notes_input = gr.Textbox(label="Additional notes")
+        gen_btn = gr.Button("Generate Recipe", variant="primary", size="lg")
+        recipe_md = gr.Markdown(label="Your Recipe")
+        mod_btn = gr.Button("Modify Recipe", variant="secondary")
+        diff_btn = gr.Button("Different Recipe", variant="secondary")
+        mod_input = gr.Textbox(label="Modification request", visible=False)
+        apply_mod = gr.Button("Apply", visible=False)
+
+        # COOKING Q&A
+        gr.Markdown("## Cooking Questions & Advice")
+        ques_input = gr.Textbox(label="Ask the chef anything", lines=2)
+        ask_btn = gr.Button("Get Answer")
+        ans_md = gr.Markdown(label="Chef's Answer")
+        history_html = gr.HTML("<p>No questions yet.</p>")
+
+        # EVENT HOOKUP
+        def update_prefs(diet, cuis):
+            global dietary_restrictions, cuisine_type
+            dietary_restrictions = diet
+            cuisine_type = cuis
+            return
+        dietary_dd.change(fn=update_prefs, inputs=[dietary_dd, cuisine_dd], outputs=[])
+        cuisine_dd.change(fn=update_prefs, inputs=[dietary_dd, cuisine_dd], outputs=[])
+
+        add_btn.click(add_ingredients, inputs=[manual_input],
+                      outputs=[ingredients_box, manual_output])
+        analyze_btn.click(analyze_image, inputs=[img_input],
+                          outputs=[image_output, ingredients_box])
+        rem_btn.click(remove_ingredient, inputs=[rem_input],
+                      outputs=[ingredients_box, rem_output])
+        clear_btn.click(clear_all, outputs=[ingredients_box, dietary_dd,
+                                            cuisine_dd, recipe_md, manual_output])
+        refresh_btn.click(lambda: ", ".join(ingredients_list),
+                          outputs=[ingredients_box])
+
+        gen_btn.click(generate_recipe,
+                      inputs=[recipe_type, time_dd, diff_dd, notes_input],
+                      outputs=[recipe_md])
+        mod_btn.click(lambda: (gr.update(visible=True), gr.update(visible=True)),
+                      outputs=[mod_input, apply_mod])
+        apply_mod.click(modify_recipe, inputs=[mod_input], outputs=[recipe_md])\
+                 .then(lambda: (gr.update(visible=False), gr.update(visible=False)),
+                       outputs=[mod_input, apply_mod])
+
+        ask_btn.click(answer_question, inputs=[ques_input], outputs=[ans_md])\
+               .then(lambda: _update_history(), outputs=[history_html])
+
+        def _update_history():
+            if not conversation_history:
+                return "<p>No questions yet.</p>"
+            html = ""
+            for qa in conversation_history[-3:]:
+                html += f"<div><strong>Q:</strong> {qa['question']}<br><strong>A:</strong> {qa['answer'][:200]}...</div>"
+            return html
+
+    return app
+
+def launch_interface():
+    """Start the Gradio app (share=True for public link)."""
+    app = create_interface()
+    app.launch(share=True, debug=True)
+
+def main():
+    """Entry point: print status and launch."""
+    print("ChefAI Simple Gradio Interface")
+    print("=" * 40)
+    print(f"Status: {status_msg}")
+    print("=" * 40)
+    launch_interface()
+
+# Auto-launch helper for interactive use
 if __name__ == "__main__":
-    openai_client = None
-    main_llm = None
-    router_llm = None
-    llm_claude = None
-    run_ChefAI()
+    main()
